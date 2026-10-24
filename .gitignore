@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+venv314/
+
+# PyInstaller 产物
+build/
+dist/
+dist_portable/
+*.spec
+!*.spec.bak
+
+# 测试与审计的生成物
+fidelity_results.json
+fidelity_run.log
+audit_378_full.md
+audit_378_full.csv
+audit_378_full.json
+shortcut_verify.json
+verify_out.txt
+*.ztl
+
+# 系统
+.DS_Store
+Thumbs.db

@@ -1,0 +1,34 @@
+MIT License
+
+Copyright (c) 2026 ZBridge (standalone executable edition)
+
+This license covers the source code and documentation contained in this repository.
+
+NOTICE — Third-party attribution:
+  The original ZBrush plugin "ZBridge 0.4.0" was created by Aniraiden and is
+  distributed as compiled binaries (.zsc / .dll). It is NOT included in this
+  repository, is not covered by this license, and all rights in it remain with
+  its original author. This repository is an independent re-implementation of
+  the engine and GUI, built on the ideas of that plugin.
+
+  Version-marker calibration ideas were referenced from the community tool
+  "ZTL2to22" (single-version 25 -> 22 only); this repository removes that
+  single-version limitation via an extensible version registry.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

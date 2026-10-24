@@ -1,0 +1,9 @@
+# 运行时：仅 Python 标准库 + Tkinter（Windows 官方 CPython 自带，无需安装）
+# 运行 GUI：  python src/zbridge.py
+
+# 构建绿色目录包所需
+pyinstaller>=6.0
+
+# 创建/核验 Windows 桌面快捷方式所需（可选，仅 tools/create_shortcut.py、
+# tools/verify_shortcut.py 会用）
+pywin32; sys_platform == "win32"
