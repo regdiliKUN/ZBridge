@@ -13,7 +13,12 @@ ZBridge — ZBrush 跨版本文件桥接器（独立可执行版）
   - 注册表层级直径 = 节点数 - 1，即架构可跨越的"最大连续代数"。
   - 真实可用跨度取决于每代之间标记（marker）是否经过验证。
   - 本构建内置 20 个版本节点 → 理论最大连续跨度为 19 代。
-  - 已验证的单跳转换：2025 -> 2022（采用参考插件已证实的头部标记改写技法）。
+  - 真实文件转换（ztl2022.py，二进制逆向实现）：ZBrush 2025/2026 保存的 ZTL → 2022 格式
+    （可在 ZBrush 2022/2023/2024 打开）。网格、细分、子工具、雕刻图层、Stager 阶段随网格数据
+    一起迁移；已在 ZBrush 2022.0.5 中实测打开（单子工具逐顶点一致，多子工具 23 个全部载入）。
+    含"带贴图网格"等尚未在 2022 中验证的结构时默认拒绝转换。
+  - 下方"标记改写 / 链式跳转"只作用于合成测试文件（HEADER ... REV ... 文本标记），真实 ZTL
+    不含这些文本标记；版本跳转面板的其余版本对仍属未实现。
 
 传递逻辑（transfer logic）：
   - 转换即"边"：相邻两代之间的边只改写那一代专属的字节标记（REV / REC / 头串）。
@@ -168,9 +173,77 @@ def output_name(src_path, dst_id, ext="ztl"):
     return str(p.parent / f"{p.stem}_to{dst_id}.{ext}")
 
 
+# ----------------------------------------------------------------------
+# 2b. 真实 ZTL 二进制转换（2025/2026 → 2022 格式），见 ztl2022.py
+# ----------------------------------------------------------------------
+# 真实 ZTL 的文件头：偏移 0x50 为格式号（2025+ = 1009，2019~2024 = 1008），0x54 为版本字符串。
+# 2022 格式文件可在 ZBrush 2022 / 2023 / 2024 中打开，因此这些目标版本共用同一份输出。
+REAL_TARGETS = ("2022", "2023", "2023.1", "2024", "2024.1")
+
+
+def _resource(name):
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def real_version_id(ver):
+    """把文件头版本字符串（如 '20250001' / '2022.0.5' / '2021.6.6'）映射到注册表 id。"""
+    if not ver:
+        return None
+    v = ver.strip()
+    if len(v) >= 4 and v[:4].isdigit():
+        year = v[:4]
+        rest = v[4:].lstrip(".")
+        if year == "2021" and rest[:1] in ("5", "6"):
+            return "2021." + rest[:1]
+        if year in BY_ID:
+            return year
+    for vid in ORDER:
+        if v.startswith(vid):
+            return vid
+    return None
+
+
+def convert_real_ztl(src_path, dst_id, fmt, ver, opts, res):
+    import ztl2022
+    src_id = real_version_id(ver)
+    res["src_id"] = src_id or ver
+    res["method"] = "binary"
+    if fmt != ztl2022.FMT_2025:
+        res["state"] = "major_incompatible"
+        res["detail"] = (f"源文件为 {ver}（格式 {fmt}）。真实文件转换目前只支持 ZBrush 2025/2026 保存的 ZTL "
+                         f"→ 2022 格式（可在 2022/2023/2024 中打开）。")
+        return res
+    if dst_id not in REAL_TARGETS:
+        res["state"] = "major_incompatible"
+        res["detail"] = (f"目标 {dst_id} 不受支持：2025 文件只能转为 2022 格式（在 2022/2023/2024 中打开）。"
+                         f"更早的版本使用不同的网格格式，尚未实现。")
+        return res
+    tmpl = ztl2022.Template.from_bin(_resource("template2022.bin"))
+    out_path = output_name(src_path, dst_id, "ztl")
+    try:
+        info = ztl2022.convert(src_path, out_path, tmpl, force=bool(opts.get("force")),
+                               progress=opts.get("progress"))
+    except ztl2022.Unverified as e:
+        res["state"] = "major_incompatible"
+        res["detail"] = f"{e}  如需尝试，可勾选“强制”（输出可能无法在 ZBrush 中打开）。"
+        return res
+    except ztl2022.ConvertError as e:
+        res["state"] = "failure"; res["detail"] = f"转换失败：{e}"; return res
+    res["out"] = out_path
+    res["ok"] = True
+    res["state"] = "done"
+    res["replacements"] = info["meshes"]
+    note = "" if not info["unverified"] else "［强制模式：含未验证结构，请在 ZBrush 中打开检查］"
+    src_note = "" if src_id == "2025" else f"［源为 {ver}，按 2025 规则转换］"
+    res["detail"] = (f"已转换 {info['meshes']} 个网格块、{info['palettes']} 个子工具面板，"
+                     f"Stager 阶段随网格数据一起保留。输出：{Path(out_path).name} {note}{src_note}").strip()
+    return res
+
+
 def convert_file(src_path, dst_id, opts=None):
     """
-    核心转换。opts: {"no_verify": bool, "force": bool}
+    核心转换。opts: {"no_verify": bool, "force": bool, "progress": callable}
     返回结果字典（供状态机消费）。
     """
     opts = opts or {}
@@ -179,6 +252,10 @@ def convert_file(src_path, dst_id, opts=None):
     try:
         if not os.path.isfile(src_path):
             res["state"] = "failure"; res["detail"] = "源文件不存在"; return res
+        import ztl2022
+        fmt, ver = ztl2022.file_format(src_path)
+        if fmt is not None:
+            return convert_real_ztl(src_path, dst_id, fmt, ver, opts, res)
         with open(src_path, "rb") as f:
             data = f.read()
         src_id = detect_version(data)
@@ -684,11 +761,42 @@ def verify_all_jumps(workdir=None):
     return matrix, "\n".join(lines), csv_path
 
 
+def _cli_convert(args):
+    """ZBridge.exe --convert 文件1 [文件2 ...] [--to 2022] [--force]
+    无控制台（窗口版 exe）时，结果写入当前目录的 zbridge_cli.log。返回码：0 全部成功，1 有失败。"""
+    dst = "2022"; force = False; files = []
+    it = iter(args)
+    for a in it:
+        if a == "--to":
+            dst = next(it, dst)
+        elif a == "--force":
+            force = True
+        else:
+            files.append(a)
+    lines = []
+    ok = 0
+    for fp in files:
+        r = convert_file(fp, dst, {"force": force})
+        ok += 1 if r["ok"] else 0
+        lines.append(f"[{r['state']}] {fp} -> {r.get('out') or '-'} | {r['detail']}")
+    lines.append(f"完成：{ok}/{len(files)} 成功")
+    text = "\n".join(lines)
+    if sys.stdout is not None:
+        try:
+            print(text)
+        except Exception:
+            pass
+    else:
+        with open("zbridge_cli.log", "a", encoding="utf-8") as f:
+            f.write(datetime.now().isoformat() + "\n" + text + "\n")
+    return 0 if ok == len(files) and files else 1
+
+
 def main():
     # CLI 模式下的控制台编码防御：中文 Windows 默认 GBK，凡非 GBK 字符(如 → ✓)会崩。
     # 统一以 errors="replace" 兜底，避免报告打印时 UnicodeEncodeError。
     if len(sys.argv) > 1 and sys.argv[1] in ("--report", "-r", "--selftest", "-t",
-                                              "--verify-all", "-v"):
+                                              "--verify-all", "-v", "--convert", "-c"):
         try:
             if hasattr(sys.stdout, "reconfigure"):
                 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -706,6 +814,8 @@ def main():
         _, report, _ = verify_all_jumps()
         print(report)
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] in ("--convert", "-c"):
+        sys.exit(_cli_convert(sys.argv[2:]))
     root = tk.Tk()
     app = ZBridgeApp(root)
     root.mainloop()

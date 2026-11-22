@@ -34,6 +34,9 @@ def main():
         "--name", "ZBridge",
         "--clean", "--noconfirm",
         "--distpath", DIST,
+        "--paths", os.path.join(ROOT, "src"),
+        "--hidden-import", "ztl2022",
+        "--add-data", os.path.join(ROOT, "src", "template2022.bin") + os.pathsep + ".",
         SRC,
     ]
     print("执行命令:\n  " + " ".join(cmd) + "\n")
