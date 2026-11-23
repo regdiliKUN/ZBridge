@@ -235,8 +235,10 @@ def convert_real_ztl(src_path, dst_id, fmt, ver, opts, res):
     res["state"] = "done"
     res["replacements"] = info["meshes"]
     note = "" if not info["unverified"] else "［强制模式：含未验证结构，请在 ZBrush 中打开检查］"
+    if info.get("dropped_features"):
+        note += f"［{info['dropped_features']} 个网格带有 2025 新增的附属数据（2022 没有对应功能），已移除，几何体不受影响］"
     src_note = "" if src_id == "2025" else f"［源为 {ver}，按 2025 规则转换］"
-    res["detail"] = (f"已转换 {info['meshes']} 个网格块、{info['palettes']} 个子工具面板，"
+    res["detail"] = (f"已转换 {info['meshes']} 个网格块、{info['palettes']} 个工具面板参数块，"
                      f"Stager 阶段随网格数据一起保留。输出：{Path(out_path).name} {note}{src_note}").strip()
     return res
 

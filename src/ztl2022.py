@@ -13,11 +13,16 @@ Rules
   * mesh chunk, type 92 -> 84:
         drop payload[0:45]  (36-char GUID, NUL, 8 bytes)
         drop 8 bytes at payload offset 0x16C (after the first drop): u32 in {0,1}, u32 == 1
-        trailer after the attachment chunks:
-            attachments (13,4) / (13,3): drop 4 zero bytes     [load-tested / matches 2022 samples]
-            attachments (7,)           : unchanged             [matches 2022 samples]
-            attachments (14,)          : drop 1 zero byte      [matches 2022 samples]
-            anything else              : UNVERIFIED -> refused unless force=True
+        after the mesh body comes a run of slots: a flag byte (0 = empty, 1 = chunks follow).
+        2025 has 4 slots that 2022 lacks (3 between slots 14..34, 1 between 36..39), all of
+        them empty except slot 21; rules are keyed by (attachment kind, slot):
+            (13,4) slot 1/4, (13,3) slot 13       : drop 4 zero bytes after  [paired samples, load-tested]
+            (13,3) slot 9, (13,4) slot 10         : drop 4 zero bytes after  [same slots in 2022 files]
+            (12,1,10) slot 35 (texture map)       : drop 3 before, 1 after   [paired samples, load-tested]
+            (7,) slot 40                          : drop 4 before            [2022 files: slot 36; load-tested]
+            slot 21 = 2025-only feature (t13, t1, a full mesh chunk, t19): emptied, then the rule
+                for whatever follows applies; geometry identical to 2025's export [load-tested]
+            anything else                        : UNVERIFIED -> refused unless force=True
   * tool-palette chunk (type 10, payload starts 0b000000 0a000000), one per subtool:
         rebuilt from the 2022 palette template; items with the same name and size keep the
         source value.
@@ -35,9 +40,44 @@ HDR_END = 0x5C
 FMT_2025 = 1009
 FMT_2022 = 1008
 
-VERIFIED_KINDS = {(13, 4): 4, (13, 3): 4, (7,): 0, (14,): 1}
-# best guess for structures not yet seen in a 2022 file (used only with force=True)
-GUESS_KINDS = {(12, 1, 10): 0}
+# (attachment kind, slot) -> (zero flags to drop before it, zero bytes to drop after it)
+SLOT_RULES = {
+    ((13, 4), 1): (0, 4),       # load-tested in 2022; paired samples
+    ((13, 4), 4): (0, 4),       # paired samples (morph target)
+    ((13, 3), 13): (0, 4),      # paired samples (layer)
+    ((12, 1, 10), 35): (3, 1),  # paired samples (texture map)
+    ((7,), 40): (4, 0),         # 2025 files: slot 40; 2022 files: slot 36 (survey)
+    ((13, 3), 9): (0, 4),       # same slot in 2022 files, 4 fewer slots after it (survey)
+    ((13, 4), 10): (0, 4),      # same slot in 2022 files, 4 fewer slots after it (survey)
+    (None, None): (0, 4),       # nothing but a 2025-only feature, which is dropped
+}
+# plausible but not checked against a 2022 file (used only with force=True)
+GUESS_SLOT_RULES = {
+    ((13, 4), 7): (0, 4), ((13, 4), 13): (0, 4),
+    ((13, 3), 1): (0, 4), ((13, 3), 4): (0, 4), ((13, 3), 7): (0, 4), ((13, 3), 10): (0, 4),
+}
+# 2025-only attachment (t13, t1, a complete mesh chunk, t19), always in slot 21 -- a slot 2022 does not have.
+# Checked: 18 empty slots then (7) follow it in 45 files, which puts (7) on its usual slot 40.
+NEW25_GROUP = (13, 1, 92, 19)
+NEW25_SLOT = 21
+
+
+def _zeros_back(d, k, lo):
+    n = 0
+    while k > lo and d[k - 1] == 0 and d[k - 4:k] != END:
+        k -= 1; n += 1
+    return n
+
+
+def _new25_group(d, j, e):
+    g0 = j - 64
+    if _hdr(d, g0, e) != (13, 16) or _hdr(d, j - 48, e) != (1, 48):
+        return None
+    k = j + _hdr(d, j, e)[1]
+    h = _hdr(d, k, e)
+    if not h or h[0] != 19:
+        return None
+    return (g0, k + h[1])
 
 
 class ConvertError(Exception):
@@ -202,9 +242,11 @@ def plan(d, force=False):
     if o != len(d) or not tops or tops[-1][1] != 1004 or sum(1 for t in tops if t[1] == 1004) != 1:
         raise ConvertError('文件顶层结构异常：%s' % [t[1] for t in tops])
     zs = tops[-1][0]
-    edits = []; info = {'meshes': 0, 'palettes': 0, 'kinds': {}, 'unverified': [], 'zs': zs}
+    edits = []; info = {'meshes': 0, 'palettes': 0, 'kinds': {}, 'unverified': [], 'zs': zs, 'strips': []}
     for i in _iter_find(d, TAG + b'\x5c\x00', zs):
         if not _is_mesh(d, i):
+            continue
+        if any(a <= i < b for a, b in info['strips']):
             continue
         size = struct.unpack_from('<I', d, i + 6)[0]
         s, e = i + 10, i + size
@@ -222,25 +264,75 @@ def plan(d, force=False):
             typ, sz = _hdr(d, p, e); kinds.append(typ); p += sz
         kind = tuple(kinds)
         info['kinds'][kind] = info['kinds'].get(kind, 0) + 1
-        if kind in VERIFIED_KINDS:
-            drop = VERIFIED_KINDS[kind]
+        # The data after the mesh body is a run of slots, each a flag byte (0 = empty) optionally
+        # followed by chunks.  2025 has 4 more slots than 2022; which slots are new is only known
+        # relative to the slot that holds data, so rules are keyed by (attachment kind, slot).
+        group = None
+        if kind == NEW25_GROUP:
+            group = (cs, q); present = None
         else:
-            info['unverified'].append((i, kind))
+            j = d.rfind(TAG + b'\x5c\x00', f + 8, cs)
+            if j >= 0 and _is_mesh(d, j):
+                group = _new25_group(d, j, e)
+                if group is None or d[cs - 1] != 1 or any(d[group[1]:cs - 1]):
+                    info['unverified'].append((i, ('nested?', kind)))
+                    if not force:
+                        continue
+                    raise ConvertError('网格块 @%x 含无法识别的嵌套结构' % i)
+            present = kind
+        if d[(group[0] if group else cs) - 1] != 1:
+            info['unverified'].append((i, ('no-flag', kind)))
             if not force:
                 continue
-            drop = GUESS_KINDS.get(kind, 0)
-        if d[q:q + drop] != b'\0' * drop:
+            raise ConvertError('网格块 @%x 附属数据前缺少标志字节' % i)
+        if group:
+            # the feature always sits in slot NEW25_SLOT (one of the slots 2022 does not have);
+            # zero-counting back from it is unreliable when an earlier slot holds data
+            between = (cs - 1 - group[1]) if present else 0
+            slot = NEW25_SLOT + between + 1
+        else:
+            zb = _zeros_back(d, cs - 1, f + 8)
+            slot = zb + 1
+        key = (present, slot if present else None)
+        rule = SLOT_RULES.get(key) or (GUESS_SLOT_RULES.get(key) if force else None)
+        if rule is None:
+            info['unverified'].append((i, (kind, slot)))
+            if not force:
+                continue
+            rule = (0, 0)
+        before, after = rule
+        if any(d[q:q + after]):
             raise ConvertError('网格块 @%x 尾部字段非零' % i)
         edits.append((i + 4, i + 6, b'\x54\x00'))
         edits.append((s, s + 45, b''))
         edits.append((f, f + 8, b''))
-        if drop:
-            edits.append((q, q + drop, b''))
+        if group:
+            # 2025-only feature (shared source mesh): drop it and leave its slots empty
+            g0, g1 = group
+            # empty the feature's slot; the rule for what follows drops the 4 slots 2022 lacks
+            edits.append((g0 - 1, g1, bytes(1)))
+            info['strips'].append((g0 - 1, g1))
+            if not present and any(d[g1:g1 + after]):
+                raise ConvertError('网格块 @%x 尾部字段非零' % i)
+            if present and before:
+                if before > between or any(d[cs - 1 - before:cs - 1]):
+                    raise ConvertError('网格块 @%x 标志区非零' % i)
+                edits.append((cs - 1 - before, cs - 1, b''))
+            info['dropped_features'] = info.get('dropped_features', 0) + 1
+        elif before:
+            if any(d[cs - 1 - before:cs - 1]):
+                raise ConvertError('网格块 @%x 标志区非零' % i)
+            edits.append((cs - 1 - before, cs - 1, b''))
+        if after:
+            edits.append((q, q + after, b''))
         info['meshes'] += 1
     if info['unverified'] and not force:
-        ks = sorted({k for _, k in info['unverified']})
-        raise Unverified('文件含尚未在 ZBrush 2022 中验证过的网格结构 %s（共 %d 处），为避免写出 ZBrush 无法打开的文件，已停止。'
+        ks = sorted({k for _, k in info['unverified']}, key=str)
+        ex = Unverified('文件含尚未在 ZBrush 2022 中验证过的网格结构 %s（共 %d 处），为避免写出 ZBrush 无法打开的文件，已停止。'
                          % (', '.join(str(k) for k in ks), len(info['unverified'])))
+
+        ex.info = info
+        raise ex
     if info['meshes'] == 0:
         raise ConvertError('没有找到网格数据块')
     return edits, info
@@ -274,7 +366,8 @@ def convert(src, dst, template, force=False, progress=None):
             for (a, b, r) in edits:
                 cum.append(cum[-1] + len(r) - (b - a))
             fixes = []; n_in = 0
-            for (c, z) in _iter_wellformed(d, zs, len(d), pals):
+            skips = pals + [(a - 1, b) for a, b in info['strips']]
+            for (c, z) in _iter_wellformed(d, zs, len(d), skips):
                 n_in += 1
                 lo = bisect.bisect_left(es, c + 10)
                 hi = bisect.bisect_right(es, c + z - 1)
