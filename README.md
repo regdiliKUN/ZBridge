@@ -7,6 +7,9 @@
 > 保留子工具、细分与 Stager 阶段，已在 ZBrush 2022.0.5 实测。v1.2 修正了 v1.1 的贴图网格与 `(7)` 类网格规则，
 > 并支持 2025 新增附属数据（移除后几何体逐顶点一致）；本机 198 个 2025 文件中 166 个可转换。
 > v1.0.0 的"标记改写"只对合成测试文件有效，对真实 ZTL 不起作用。详见 [docs/真实ZTL转换.md](docs/真实ZTL转换.md)。
+
+> 觉得好用的话，点个 ⭐ Star 支持一下 · If you find it useful, please give it a ⭐ Star!
+
 ---
 
 ## 作者与来源 / Authorship
@@ -34,7 +37,7 @@
 
 ### 方式一：直接下载便携包（推荐，无需 Python）
 
-到 [Releases](../../releases) 下载 `ZBridge_Portable.zip`，解压后双击 **`ZBridge.exe`** 即可。
+到 [Releases](../../releases/latest) 下载 `ZBridge_Portable_v1.2_win64.zip`，解压后双击 **`ZBridge.exe`** 即可。
 整个目录自包含，可整体复制到任意机器 / U 盘运行，不依赖外部环境。
 
 ### 方式二：从源码运行

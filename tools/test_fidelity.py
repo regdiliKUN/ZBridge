@@ -532,13 +532,16 @@ def m13_cli():
       f"len={len(rep)} 含节点数={'注册表版本节点数' in rep}",
       "注册表版本节点数" in rep and "最大连续跨度" in rep)
     # 冻结 exe 复现（证明打包体 CLI 可用）
-    exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ZBridge.exe")
-    exe = os.path.abspath(exe)
+    # build.py 产物在 dist/ZBridge/ 下；仓库根目录作为旧布局兜底
+    _root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    _cands = [os.path.join(_root, "dist", "ZBridge", "ZBridge.exe"),
+              os.path.join(_root, "ZBridge.exe")]
+    exe = next((c for c in _cands if os.path.isfile(c)), _cands[0])
     if os.path.isfile(exe):
         try:
-            proc = subprocess.run([exe, "--verify-all"], capture_output=True, text=True,
+            proc = subprocess.run([exe, "--verify-all"], capture_output=True, encoding="utf-8", errors="replace",
                                   timeout=60, creationflags=0x08000000)
-            out = proc.stdout
+            out = proc.stdout or ""
         except subprocess.TimeoutExpired:
             out = ""
             err = "subprocess timeout(60s) - 沙箱无法捕获冻结 exe 输出"
